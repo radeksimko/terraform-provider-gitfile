@@ -1,10 +1,13 @@
 package gitfile
 
 import (
-	"github.com/hashicorp/terraform/helper/schema"
+	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
+
+	"github.com/hashicorp/terraform/helper/schema"
 )
 
 func fileResource() *schema.Resource {
@@ -29,63 +32,55 @@ func fileResource() *schema.Resource {
 		Create: fileCreateUpdate,
 		Read:   fileRead,
 		Delete: fileDelete,
-		Exists: fileExists,
 	}
 }
 
 func fileCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	checkout_dir := d.Get("checkout_dir").(string)
+	log.Printf("[DEBUG] Creating/updateing gitfile file at %q", checkout_dir)
 	lockCheckout(checkout_dir)
 	defer unlockCheckout(checkout_dir)
 
-	filepath := d.Get("path").(string)
+	filePath := path.Join(checkout_dir, d.Get("path").(string))
 	contents := d.Get("contents").(string)
 
-	if err := os.MkdirAll(path.Dir(path.Join(checkout_dir, filepath)), 0755); err != nil {
-		return err
+	if err := os.MkdirAll(path.Dir(filePath), 0755); err != nil {
+		return fmt.Errorf("Failed to create parent directory: %s", err)
 	}
-	if err := ioutil.WriteFile(path.Join(checkout_dir, filepath), []byte(contents), 0666); err != nil {
-		return err
-	}
-
-	if _, err := gitCommand(checkout_dir, "add", "--", filepath); err != nil {
-		return err
+	if err := ioutil.WriteFile(filePath, []byte(contents), 0666); err != nil {
+		return fmt.Errorf("Failed to write file to %s: %s", filePath, err)
 	}
 
-	hand := handle{
-		kind: "file",
-		hash: hashString(contents),
-		path: filepath,
-	}
+	d.SetId(filePath)
 
-	d.SetId(hand.String())
 	return nil
 }
 
 func fileRead(d *schema.ResourceData, meta interface{}) error {
-	return nil
-}
-
-func fileExists(d *schema.ResourceData, meta interface{}) (bool, error) {
 	checkout_dir := d.Get("checkout_dir").(string)
+	log.Printf("[DEBUG] Reading gitfile file from %q", checkout_dir)
 	lockCheckout(checkout_dir)
 	defer unlockCheckout(checkout_dir)
-	filepath := d.Get("path").(string)
 
-	var out []byte
-	var err error
-	if out, err = ioutil.ReadFile(path.Join(checkout_dir, filepath)); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		} else {
-			return false, err
-		}
+	if _, err := os.Stat(checkout_dir); err != nil {
+		d.SetId("")
+		return nil
 	}
-	if string(out) == d.Get("contents").(string) {
-		return true, nil
-	} else {
-		return false, nil
+
+	filePath := d.Get("path").(string)
+	contents, err := gitCommand(checkout_dir, "show", "HEAD:"+filePath)
+	if err != nil {
+		return fmt.Errorf("Failed to execute git show of %q: %s", filePath, err)
 	}
+
+	log.Printf("[DEBUG] Setting file contents to %q", contents)
+
+	err = d.Set("contents", string(contents))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func fileDelete(d *schema.ResourceData, meta interface{}) error {
