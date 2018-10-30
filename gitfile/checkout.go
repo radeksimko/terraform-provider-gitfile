@@ -86,6 +86,14 @@ func CheckoutRead(d *schema.ResourceData, meta interface{}) error {
 	lockCheckout(checkout_dir)
 	defer unlockCheckout(checkout_dir)
 
+	// Reset
+	if _, err := gitCommand(checkout_dir, "reset", "HEAD", "--hard"); err != nil {
+		return err
+	}
+	if _, err := gitCommand(checkout_dir, "clean", "-f", "-d"); err != nil {
+		return err
+	}
+
 	var repo string
 	var branch string
 	var head string
